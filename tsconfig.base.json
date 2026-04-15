@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@visa/shared-types": ["packages/shared-types/src"],
+      "@visa/shared-contracts": ["packages/shared-contracts/src"],
+      "@visa/shared-audit": ["packages/shared-audit/src"],
+      "@visa/shared-auth": ["packages/shared-auth/src"],
+      "@visa/shared-testkit": ["packages/shared-testkit/src"]
+    }
+  }
+}
