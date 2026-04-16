@@ -5,4 +5,8 @@ export const ProtectedRoutes = Object.freeze({
     roles: [Role.ADMIN, Role.CASE_OPERATOR, Role.REVIEWER, Role.APPROVER],
     requireTenant: true,
   },
+  '/audit/logs': {
+    roles: [Role.ADMIN, Role.REVIEWER, Role.APPROVER],
+    requireTenant: true,
+  },
 })

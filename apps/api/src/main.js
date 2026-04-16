@@ -23,14 +23,24 @@ const server = http.createServer((req, res) => {
     })
   }
 
-  if (req.url === '/audit/logs') {
-    return sendJson(res, 200, {
-      items: getAuditLogSnapshot(),
-      requestId: context.requestId,
-    })
+  const publicDomainRoutes = ['/client-access/open', '/client-portal/summary', '/client-portal/upload', '/client-portal/submit']
+  if (publicDomainRoutes.includes(req.url)) {
+    const handled = handleDomainRoutes(req, res, context, sendJson)
+    if (handled !== false) {
+      return handled
+    }
   }
 
-  if (req.url.startsWith('/clients') || req.url.startsWith('/beneficiaries') || req.url.startsWith('/cases')) {
+  if (
+    req.url.startsWith('/clients') ||
+    req.url.startsWith('/beneficiaries') ||
+    req.url.startsWith('/cases') ||
+    req.url.startsWith('/reviews') ||
+    req.url.startsWith('/approvals') ||
+    req.url.startsWith('/ops/') ||
+    req.url.startsWith('/client-access-tokens') ||
+    req.url.startsWith('/client-access/')
+  ) {
     const authError = requireAuthenticated(context)
     if (authError) {
       return sendJson(res, authError.status, {
@@ -101,6 +111,13 @@ const server = http.createServer((req, res) => {
       return sendJson(res, roleError.status, {
         ...roleError.body,
         request_id: context.requestId,
+      })
+    }
+
+    if (req.url === '/audit/logs') {
+      return sendJson(res, 200, {
+        items: getAuditLogSnapshot().filter((item) => item.tenantId === context.tenantId),
+        requestId: context.requestId,
       })
     }
 

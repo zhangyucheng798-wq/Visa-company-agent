@@ -75,7 +75,26 @@ export const ApproveCaseCommand = Object.freeze({
   reasonCode: 'string',
 })
 
+export const ApproveReviewCommand = Object.freeze({
+  caseId: 'string',
+})
+
+export const ReturnReviewCommand = Object.freeze({
+  caseId: 'string',
+  reasonCode: 'string',
+})
+
 export const RejectCaseCommand = Object.freeze({
+  caseId: 'string',
+  reasonCode: 'string',
+})
+
+export const ApproveApprovalCommand = Object.freeze({
+  caseId: 'string',
+  reasonCode: 'string',
+})
+
+export const RejectApprovalCommand = Object.freeze({
   caseId: 'string',
   reasonCode: 'string',
 })
@@ -105,7 +124,44 @@ export const CaseSummaryDto = Object.freeze({
   caseStatus: 'string',
   clientVisibleStatus: 'string',
   riskLevel: 'string',
+  approvalSubmittedAt: 'string|null',
   createdAt: 'string',
+})
+
+export const ReviewDto = Object.freeze({
+  reviewId: 'string',
+  caseId: 'string',
+  tenantId: 'string',
+  actorId: 'string',
+  reviewStatus: 'pending|in_progress|returned|completed',
+  decision: 'approved|returned',
+  reasonCode: 'string',
+  createdAt: 'string',
+  updatedAt: 'string',
+  decidedAt: 'string',
+})
+
+export const ApprovalDto = Object.freeze({
+  approvalId: 'string',
+  caseId: 'string',
+  tenantId: 'string',
+  actorId: 'string',
+  approvalStatus: 'pending|approved|rejected',
+  reasonCode: 'string',
+  createdAt: 'string',
+  updatedAt: 'string',
+  decidedAt: 'string',
+})
+
+export const TaskDto = Object.freeze({
+  taskId: 'string',
+  tenantId: 'string',
+  caseId: 'string',
+  title: 'string',
+  status: 'open|assigned|in_progress|completed|cancelled',
+  assigneeId: 'string|null',
+  createdAt: 'string',
+  updatedAt: 'string',
 })
 
 export const RawFileObjectDto = Object.freeze({
