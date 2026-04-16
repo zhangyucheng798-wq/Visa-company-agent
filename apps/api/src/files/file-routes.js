@@ -70,7 +70,7 @@ export function handleFileRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -86,7 +86,7 @@ export function handleFileRoutes(req, res, context, sendJson) {
   if (req.url === '/files/raw' && req.method === 'GET') {
     return sendJson(res, 200, {
       requestId: context.requestId,
-      items: listRawFileObjects(),
+      items: listRawFileObjects(context.tenantId),
     })
   }
 
@@ -103,7 +103,7 @@ export function handleFileRoutes(req, res, context, sendJson) {
       })
     }
 
-    const updated = updateRawFileStatuses(rawFileObjectId, {
+    const updated = updateRawFileStatuses(rawFileObjectId, context.tenantId, {
       validationStatus,
       validationReasonCode: req.headers['x-validation-reason-code'] || null,
       validationUpdatedAt: new Date().toISOString(),
@@ -142,7 +142,7 @@ export function handleFileRoutes(req, res, context, sendJson) {
       })
     }
 
-    const updated = updateRawFileStatuses(rawFileObjectId, {
+    const updated = updateRawFileStatuses(rawFileObjectId, context.tenantId, {
       scanStatus,
       scanReasonCode: req.headers['x-scan-reason-code'] || null,
       scanUpdatedAt: new Date().toISOString(),
@@ -170,7 +170,7 @@ export function handleFileRoutes(req, res, context, sendJson) {
 
   if (req.url === '/files/admit-check' && req.method === 'GET') {
     const rawFileObjectId = req.headers['x-raw-file-object-id']
-    const rawFileObject = findRawFileObject(rawFileObjectId)
+    const rawFileObject = findRawFileObject(rawFileObjectId, context.tenantId)
     const result = checkDocumentAdmissionPreconditions(rawFileObject)
 
     if (!result.ok) {
@@ -191,13 +191,13 @@ export function handleFileRoutes(req, res, context, sendJson) {
   if (req.url === '/files/document-versions' && req.method === 'GET') {
     return sendJson(res, 200, {
       requestId: context.requestId,
-      items: listDocumentVersions(),
+      items: listDocumentVersions(context.tenantId),
     })
   }
 
   if (req.url === '/files/admit' && req.method === 'POST') {
     const rawFileObjectId = req.headers['x-raw-file-object-id']
-    const rawFileObject = findRawFileObject(rawFileObjectId)
+    const rawFileObject = findRawFileObject(rawFileObjectId, context.tenantId)
     const result = checkDocumentAdmissionPreconditions(rawFileObject)
 
     if (!result.ok) {
@@ -227,7 +227,7 @@ export function handleFileRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }

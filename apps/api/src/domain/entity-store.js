@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { ApprovalStatus, CaseStatus, ClientVisibleStatus, MaterialSlotStatus, ReviewStatus, RiskLevel, TaskStatus } from '../../../../packages/shared-types/src/index.js'
+import { ActionItemStatus, ApprovalStatus, BlockerType, CaseStatus, ClientVisibleStatus, MaterialSlotStatus, NotificationDeliveryStatus, ReviewStatus, RiskLevel, TaskStatus } from '../../../../packages/shared-types/src/index.js'
 
 const clients = []
 const beneficiaries = []
@@ -9,6 +9,8 @@ const clientAccessTokens = []
 const reviews = []
 const approvals = []
 const tasks = []
+const actionItems = []
+const notifications = []
 
 export function listTasksByTenant(tenantId) {
   return tasks.filter((item) => item.tenantId === tenantId)
@@ -20,6 +22,46 @@ export function listTasksByCase(caseId, tenantId) {
 
 export function findTaskById(taskId, tenantId) {
   return tasks.find((item) => item.taskId === taskId && item.tenantId === tenantId) || null
+}
+
+export function listActionItemsByTenant(tenantId) {
+  return actionItems.filter((item) => item.tenantId === tenantId)
+}
+
+export function listActionItemsByCase(caseId, tenantId) {
+  return actionItems.filter((item) => item.caseId === caseId && item.tenantId === tenantId)
+}
+
+export function findActionItemById(actionItemId, tenantId) {
+  return actionItems.find((item) => item.actionItemId === actionItemId && item.tenantId === tenantId) || null
+}
+
+export function listNotificationsByTenant(tenantId) {
+  return notifications.filter((item) => item.tenantId === tenantId)
+}
+
+export function listNotificationsByCase(caseId, tenantId) {
+  return notifications.filter((item) => item.caseId === caseId && item.tenantId === tenantId)
+}
+
+export function listNotificationsByType(notificationType, tenantId) {
+  return notifications.filter((item) => item.notificationType === notificationType && item.tenantId === tenantId)
+}
+
+export function listNotificationsByRecipient(recipientActorId, tenantId) {
+  return notifications.filter((item) => item.recipientActorId === recipientActorId && item.tenantId === tenantId)
+}
+
+export function listNotificationsByDeliveryStatus(deliveryStatus, tenantId) {
+  return notifications.filter((item) => item.deliveryStatus === deliveryStatus && item.tenantId === tenantId)
+}
+
+export function listInternalNotificationsByRecipientRole(recipientRole, tenantId) {
+  return notifications.filter((item) => item.recipientRole === recipientRole && item.tenantId === tenantId)
+}
+
+export function findNotificationById(notificationId, tenantId) {
+  return notifications.find((item) => item.notificationId === notificationId && item.tenantId === tenantId) || null
 }
 
 export function listApprovalsByTenant(tenantId) {
@@ -193,6 +235,217 @@ export function createTask({ tenantId, caseId, title, status = TaskStatus.OPEN, 
   return record
 }
 
+export function createActionItem({
+  tenantId,
+  caseId,
+  title,
+  blockerType,
+  status = ActionItemStatus.OPEN,
+  convertedTaskId = null,
+  actionItemId = crypto.randomUUID(),
+}) {
+  const now = new Date().toISOString()
+  const record = {
+    actionItemId,
+    tenantId,
+    caseId,
+    title,
+    blockerType,
+    status,
+    convertedTaskId,
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  actionItems.push(record)
+  return record
+}
+
+export function createBlockerActionItem(caseId, tenantId, blockerType) {
+  const visaCase = findCaseById(caseId, tenantId)
+  if (!visaCase) return null
+
+  const existing = actionItems.find(
+    (item) => item.caseId === caseId && item.tenantId === tenantId && item.blockerType === blockerType && item.status === ActionItemStatus.OPEN,
+  )
+  if (existing) return existing
+
+  return createActionItem({
+    tenantId,
+    caseId,
+    blockerType,
+    title: buildActionItemTitle(blockerType),
+  })
+}
+
+export function convertActionItemToTask(actionItemId, tenantId, assigneeId = null) {
+  const actionItem = findActionItemById(actionItemId, tenantId)
+  if (!actionItem) return { error: 'ACTION_ITEM_NOT_FOUND' }
+  if (actionItem.status === ActionItemStatus.CONVERTED_TO_TASK) return { error: 'ACTION_ITEM_ALREADY_CONVERTED' }
+  if (actionItem.status !== ActionItemStatus.OPEN) return { error: 'ACTION_ITEM_NOT_OPEN' }
+
+  const task = createTask({
+    tenantId,
+    caseId: actionItem.caseId,
+    title: actionItem.title,
+    assigneeId,
+    status: assigneeId ? TaskStatus.ASSIGNED : TaskStatus.OPEN,
+  })
+
+  actionItem.status = ActionItemStatus.CONVERTED_TO_TASK
+  actionItem.convertedTaskId = task.taskId
+  actionItem.updatedAt = new Date().toISOString()
+
+  return {
+    actionItem,
+    task,
+  }
+}
+
+export function dispatchInternalNotification({
+  tenantId,
+  caseId,
+  notificationType,
+  recipientRole,
+  recipientActorId = null,
+  payload,
+  notificationId = crypto.randomUUID(),
+}) {
+  const visaCase = findCaseById(caseId, tenantId)
+  if (!visaCase) return null
+
+  const now = new Date().toISOString()
+  const record = {
+    notificationId,
+    tenantId,
+    caseId,
+    channel: 'internal',
+    notificationType,
+    recipientRole,
+    recipientActorId,
+    payload,
+    deliveryStatus: NotificationDeliveryStatus.PENDING,
+    deliveryAttempts: 0,
+    lastAttemptAt: null,
+    deliveredAt: null,
+    failureReason: null,
+    dispatchedAt: now,
+  }
+
+  notifications.push(record)
+  return record
+}
+
+export function markNotificationDelivered(notificationId, tenantId) {
+  const notification = findNotificationById(notificationId, tenantId)
+  if (!notification) return null
+
+  const retryCheck = canRetryNotificationDelivery(notification)
+  if (!retryCheck.ok) return { error: retryCheck.error }
+
+  const now = new Date().toISOString()
+  notification.deliveryStatus = NotificationDeliveryStatus.SENT
+  notification.deliveryAttempts += 1
+  notification.lastAttemptAt = now
+  notification.deliveredAt = now
+  notification.failureReason = null
+  return notification
+}
+
+export function markNotificationDeliveryFailed(notificationId, tenantId, failureReason) {
+  const notification = findNotificationById(notificationId, tenantId)
+  if (!notification) return null
+
+  const retryCheck = canRetryNotificationDelivery(notification)
+  if (!retryCheck.ok) return { error: retryCheck.error }
+
+  const now = new Date().toISOString()
+  notification.deliveryStatus = NotificationDeliveryStatus.FAILED
+  notification.deliveryAttempts += 1
+  notification.lastAttemptAt = now
+  notification.deliveredAt = null
+  notification.failureReason = failureReason
+  return notification
+}
+
+export function retryNotificationDelivery(notificationId, tenantId, outcome = 'sent', failureReason = 'retry_failed') {
+  const notification = findNotificationById(notificationId, tenantId)
+  if (!notification) return { error: 'NOTIFICATION_NOT_FOUND' }
+
+  const retryCheck = canRetryNotificationDelivery(notification)
+  if (!retryCheck.ok) return { error: retryCheck.error }
+
+  if (outcome === 'failed') {
+    const failed = markNotificationDeliveryFailed(notificationId, tenantId, failureReason)
+    if (failed?.error) return failed
+    return { notification: failed }
+  }
+
+  const delivered = markNotificationDelivered(notificationId, tenantId)
+  if (delivered?.error) return delivered
+  return { notification: delivered }
+}
+
+export function correctNotificationDelivery(notificationId, tenantId, correction = 'mark_sent') {
+  const notification = findNotificationById(notificationId, tenantId)
+  if (!notification) return { error: 'NOTIFICATION_NOT_FOUND' }
+
+  const now = new Date().toISOString()
+  if (correction === 'mark_sent') {
+    notification.deliveryStatus = NotificationDeliveryStatus.SENT
+    notification.deliveredAt = now
+    notification.lastAttemptAt = now
+    notification.failureReason = null
+    return { notification }
+  }
+
+  if (correction === 'reopen') {
+    notification.deliveryStatus = NotificationDeliveryStatus.PENDING
+    notification.deliveredAt = null
+    notification.failureReason = null
+    return { notification }
+  }
+
+  return { error: 'NOTIFICATION_CORRECTION_INVALID' }
+}
+
+export function reconcilePendingNotifications(tenantId = null) {
+  const scoped = notifications.filter((item) => !tenantId || item.tenantId === tenantId)
+  const reopened = scoped.filter((item) => item.deliveryStatus === NotificationDeliveryStatus.FAILED && item.deliveryAttempts < 3)
+  const pending = scoped.filter((item) => item.deliveryStatus === NotificationDeliveryStatus.PENDING)
+  const exhausted = scoped.filter((item) => item.deliveryStatus === NotificationDeliveryStatus.FAILED && item.deliveryAttempts >= 3)
+
+  reopened.forEach((item) => {
+    item.deliveryStatus = NotificationDeliveryStatus.PENDING
+    item.deliveredAt = null
+    item.failureReason = null
+  })
+
+  return {
+    reopened,
+    pending: [...pending, ...reopened],
+    exhausted,
+  }
+}
+
+function canRetryNotificationDelivery(notification) {
+  if (notification.deliveryStatus === NotificationDeliveryStatus.SENT) {
+    return { ok: false, error: 'NOTIFICATION_ALREADY_DELIVERED' }
+  }
+  if (notification.deliveryAttempts >= 3) {
+    return { ok: false, error: 'NOTIFICATION_MAX_RETRIES_EXCEEDED' }
+  }
+  return { ok: true }
+}
+
+function buildActionItemTitle(blockerType) {
+  if (blockerType === BlockerType.MISSING_MATERIAL) return 'Collect missing client materials'
+  if (blockerType === BlockerType.REVIEW_REQUIRED) return 'Resolve review return items'
+  if (blockerType === BlockerType.APPROVAL_REQUIRED) return 'Resolve approval rejection items'
+  if (blockerType === BlockerType.SECURITY_HOLD) return 'Resolve security hold items'
+  return 'Resolve blocker'
+}
+
 export function getReviewSubmissionPreview(caseId, tenantId) {
   const visaCase = findCaseById(caseId, tenantId)
   if (!visaCase) return null
@@ -277,6 +530,7 @@ export function submitForApproval(caseId, tenantId) {
   if (!visaCase) return null
 
   const now = new Date().toISOString()
+  visaCase.caseStatus = CaseStatus.APPROVAL_IN_PROGRESS
   visaCase.clientVisibleStatus = ClientVisibleStatus.UNDER_REVIEW
   visaCase.approvalSubmittedAt = now
   visaCase.updatedAt = now
@@ -420,6 +674,24 @@ export function issueClientAccessToken({ tenantId, caseId, clientId, actorId, ex
 
   clientAccessTokens.push(record)
   return record
+}
+
+export function serializeClientAccessToken(record) {
+  if (!record) return null
+
+  return {
+    clientAccessTokenId: record.clientAccessTokenId,
+    tenantId: record.tenantId,
+    caseId: record.caseId,
+    clientId: record.clientId,
+    actorId: record.actorId,
+    status: record.status,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    expiresAt: record.expiresAt,
+    openedAt: record.openedAt,
+    revokedAt: record.revokedAt,
+  }
 }
 
 export function listClientAccessTokensByTenant(tenantId) {

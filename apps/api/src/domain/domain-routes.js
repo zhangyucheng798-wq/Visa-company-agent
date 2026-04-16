@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { AuditActionCode } from '../../../../packages/shared-audit/src/index.js'
-import { MaterialSlotStatus } from '../../../../packages/shared-types/src/index.js'
+import { BlockerType, MaterialSlotStatus } from '../../../../packages/shared-types/src/index.js'
 import { buildAuditContext } from '../audit/audit-context.js'
 import { enforceAuditWritePolicy } from '../audit/audit-guards.js'
 import { writeAuditRecord } from '../audit/audit-service.js'
@@ -9,7 +9,15 @@ import { validateUploadSlotScope } from '../files/slot-scope.js'
 import {
   closeCase,
   createBeneficiary,
+  createBlockerActionItem,
+  convertActionItemToTask,
   createClient,
+  correctNotificationDelivery,
+  dispatchInternalNotification,
+  listNotificationsByCase,
+  listNotificationsByDeliveryStatus,
+  listNotificationsByTenant,
+  retryNotificationDelivery,
   rejectApprovalDecision,
   assignCaseOwner,
   createMaterialSlotsForCase,
@@ -19,6 +27,8 @@ import {
   findClientAccessTokenByValue,
   findClientById,
   issueClientAccessToken,
+  listTasksByCase,
+  listTasksByTenant,
   listApprovalsByCase,
   listApprovalsByTenant,
   listBeneficiariesByTenant,
@@ -29,6 +39,7 @@ import {
   listReviewsByCase,
   listReviewsByTenant,
   markClientAccessTokenOpened,
+  serializeClientAccessToken,
   recordApprovalDecision,
   recordReviewDecision,
   rejectReviewDecision,
@@ -81,7 +92,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -131,7 +142,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -196,7 +207,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -261,7 +272,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
       materialSlots: listMaterialSlotsByCase(visaCase.caseId, context.tenantId),
       reviews: listReviewsByCase(visaCase.caseId, context.tenantId),
       approvals: listApprovalsByCase(visaCase.caseId, context.tenantId),
-      clientAccessTokens: clientAccessTokens.filter((item) => item.caseId === visaCase.caseId),
+      clientAccessTokens: clientAccessTokens.filter((item) => item.caseId === visaCase.caseId).map(serializeClientAccessToken),
     }))
 
     return sendJson(res, 200, {
@@ -280,11 +291,16 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     const ownerScope = req.headers['x-owner-scope'] || 'all'
     const riskLevel = req.headers['x-risk-level']
     const caseStatus = req.headers['x-case-status']
+    const taskStatus = req.headers['x-task-status']
     const items = listCasesByTenant(context.tenantId).filter((visaCase) => {
       if (ownerScope === 'mine' && visaCase.ownerId !== context.actorId) return false
       if (ownerScope === 'team' && !visaCase.ownerId) return false
       if (riskLevel && visaCase.riskLevel !== riskLevel) return false
       if (caseStatus && visaCase.caseStatus !== caseStatus) return false
+      if (taskStatus) {
+        const caseTasks = listTasksByCase(visaCase.caseId, context.tenantId)
+        if (!caseTasks.some((task) => task.status === taskStatus)) return false
+      }
       return true
     })
 
@@ -294,8 +310,162 @@ export function handleDomainRoutes(req, res, context, sendJson) {
         ownerScope,
         riskLevel: riskLevel || null,
         caseStatus: caseStatus || null,
+        taskStatus: taskStatus || null,
       },
       items,
+    })
+  }
+
+  if (req.url === '/tasks' && req.method === 'GET') {
+    const caseId = req.headers['x-case-id']
+    const taskStatus = req.headers['x-task-status']
+    const assigneeId = req.headers['x-assignee-id']
+    const items = (caseId
+      ? listTasksByCase(caseId, context.tenantId)
+      : listTasksByTenant(context.tenantId)
+    ).filter((task) => {
+      if (taskStatus && task.status !== taskStatus) return false
+      if (assigneeId && task.assigneeId !== assigneeId) return false
+      return true
+    })
+
+    return sendJson(res, 200, {
+      requestId: context.requestId,
+      filters: {
+        caseId: caseId || null,
+        taskStatus: taskStatus || null,
+        assigneeId: assigneeId || null,
+      },
+      items,
+    })
+  }
+
+  if (req.url === '/tasks/convert-action-item' && req.method === 'POST') {
+    const actionItemId = req.headers['x-action-item-id']
+    const assigneeId = req.headers['x-assignee-id'] || null
+    const result = convertActionItemToTask(actionItemId, context.tenantId, assigneeId)
+
+    if (result.error === 'ACTION_ITEM_NOT_FOUND') {
+      return sendJson(res, 404, {
+        code: 'ACTION_ITEM_NOT_FOUND',
+        message: 'Action item not found in current tenant',
+        request_id: context.requestId,
+        retryable: false,
+      })
+    }
+
+    if (result.error === 'ACTION_ITEM_ALREADY_CONVERTED') {
+      return sendJson(res, 409, {
+        code: 'ACTION_ITEM_ALREADY_CONVERTED',
+        message: 'Action item has already been converted to a task',
+        request_id: context.requestId,
+        retryable: false,
+      })
+    }
+
+    if (result.error === 'ACTION_ITEM_NOT_OPEN') {
+      return sendJson(res, 409, {
+        code: 'ACTION_ITEM_NOT_OPEN',
+        message: 'Action item is not open for task conversion',
+        request_id: context.requestId,
+        retryable: false,
+      })
+    }
+
+    return sendJson(res, 200, {
+      requestId: context.requestId,
+      actionItem: result.actionItem,
+      task: result.task,
+    })
+  }
+
+  if (req.url === '/notifications' && req.method === 'GET') {
+    const caseId = req.headers['x-case-id']
+    const deliveryStatus = req.headers['x-delivery-status']
+    let items = listNotificationsByTenant(context.tenantId)
+
+    if (caseId) {
+      items = items.filter((item) => item.caseId === caseId)
+    }
+    if (deliveryStatus) {
+      items = items.filter((item) => item.deliveryStatus === deliveryStatus)
+    }
+
+    return sendJson(res, 200, {
+      requestId: context.requestId,
+      filters: {
+        caseId: caseId || null,
+        deliveryStatus: deliveryStatus || null,
+      },
+      items,
+    })
+  }
+
+  if (req.url === '/notifications/retry' && req.method === 'POST') {
+    const notificationId = req.headers['x-notification-id']
+    const outcome = req.headers['x-retry-outcome'] || 'sent'
+    const failureReason = req.headers['x-failure-reason'] || 'retry_failed'
+    const result = retryNotificationDelivery(notificationId, context.tenantId, outcome, failureReason)
+
+    if (result.error === 'NOTIFICATION_NOT_FOUND') {
+      return sendJson(res, 404, {
+        code: 'NOTIFICATION_NOT_FOUND',
+        message: 'Notification not found in current tenant',
+        request_id: context.requestId,
+        retryable: false,
+      })
+    }
+
+    if (result.error === 'NOTIFICATION_ALREADY_DELIVERED') {
+      return sendJson(res, 409, {
+        code: 'NOTIFICATION_ALREADY_DELIVERED',
+        message: 'Notification has already been delivered',
+        request_id: context.requestId,
+        retryable: false,
+      })
+    }
+
+    if (result.error === 'NOTIFICATION_MAX_RETRIES_EXCEEDED') {
+      return sendJson(res, 409, {
+        code: 'NOTIFICATION_MAX_RETRIES_EXCEEDED',
+        message: 'Notification retry limit has been reached',
+        request_id: context.requestId,
+        retryable: false,
+      })
+    }
+
+    return sendJson(res, 200, {
+      requestId: context.requestId,
+      notification: result.notification,
+    })
+  }
+
+  if (req.url === '/notifications/correct' && req.method === 'POST') {
+    const notificationId = req.headers['x-notification-id']
+    const correction = req.headers['x-correction-action'] || 'mark_sent'
+    const result = correctNotificationDelivery(notificationId, context.tenantId, correction)
+
+    if (result.error === 'NOTIFICATION_NOT_FOUND') {
+      return sendJson(res, 404, {
+        code: 'NOTIFICATION_NOT_FOUND',
+        message: 'Notification not found in current tenant',
+        request_id: context.requestId,
+        retryable: false,
+      })
+    }
+
+    if (result.error === 'NOTIFICATION_CORRECTION_INVALID') {
+      return sendJson(res, 400, {
+        code: 'NOTIFICATION_CORRECTION_INVALID',
+        message: 'Notification correction action is invalid',
+        request_id: context.requestId,
+        retryable: false,
+      })
+    }
+
+    return sendJson(res, 200, {
+      requestId: context.requestId,
+      notification: result.notification,
     })
   }
 
@@ -371,7 +541,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
   if (req.url === '/client-access-tokens' && req.method === 'GET') {
     return sendJson(res, 200, {
       requestId: context.requestId,
-      items: listClientAccessTokensByTenant(context.tenantId),
+      items: listClientAccessTokensByTenant(context.tenantId).map(serializeClientAccessToken),
     })
   }
 
@@ -410,7 +580,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -426,7 +596,10 @@ export function handleDomainRoutes(req, res, context, sendJson) {
 
     return sendJson(res, 201, {
       requestId: context.requestId,
-      clientAccessToken: tokenRecord,
+      clientAccessToken: {
+        ...serializeClientAccessToken(tokenRecord),
+        token: tokenRecord.token,
+      },
       audit: auditWriteResult.value,
     })
   }
@@ -485,7 +658,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -538,7 +711,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -547,7 +720,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
 
     return sendJson(res, 200, {
       requestId: context.requestId,
-      clientAccessToken: revokedToken,
+      clientAccessToken: serializeClientAccessToken(revokedToken),
       audit: auditWriteResult.value,
     })
   }
@@ -756,7 +929,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -808,7 +981,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -858,16 +1031,32 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
 
     const updatedCase = sendSupplementRequest(caseId, context.tenantId)
+    const actionItem = createBlockerActionItem(caseId, context.tenantId, BlockerType.MISSING_MATERIAL)
+    const notification = dispatchInternalNotification({
+      tenantId: context.tenantId,
+      caseId,
+      notificationType: 'supplement_request_internal',
+      recipientRole: 'case_operator',
+      recipientActorId: updatedCase.ownerId,
+      payload: {
+        caseId: updatedCase.caseId,
+        clientId: updatedCase.clientId,
+        blockerType: BlockerType.MISSING_MATERIAL,
+        actionItemId: actionItem?.actionItemId || null,
+      },
+    })
 
     return sendJson(res, 200, {
       requestId: context.requestId,
       case: updatedCase,
+      actionItem,
+      notification,
       audit: auditWriteResult.value,
     })
   }
@@ -903,7 +1092,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -948,7 +1137,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -998,7 +1187,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -1050,17 +1239,19 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
 
     const result = rejectReviewDecision(caseId, context.tenantId, context.actorId, reasonCode, preview.reviewId)
+    const actionItem = createBlockerActionItem(caseId, context.tenantId, BlockerType.REVIEW_REQUIRED)
 
     return sendJson(res, 200, {
       requestId: context.requestId,
       case: result.case,
       review: result.review,
+      actionItem,
       audit: auditWriteResult.value,
     })
   }
@@ -1097,7 +1288,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -1148,7 +1339,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -1195,7 +1386,7 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
@@ -1246,17 +1437,19 @@ export function handleDomainRoutes(req, res, context, sendJson) {
     }
 
     const auditWriteResult = writeAuditRecord(auditContext.value)
-    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId)
+    const auditFailure = enforceAuditWritePolicy(auditWriteResult, context.requestId, auditContext.value)
     if (auditFailure) {
       return sendJson(res, auditFailure.status, auditFailure.body)
     }
 
     const result = rejectApprovalDecision(caseId, context.tenantId, context.actorId, reasonCode, preview.approvalId)
+    const actionItem = createBlockerActionItem(caseId, context.tenantId, BlockerType.APPROVAL_REQUIRED)
 
     return sendJson(res, 200, {
       requestId: context.requestId,
       case: result.case,
       approval: result.approval,
+      actionItem,
       audit: auditWriteResult.value,
     })
   }

@@ -10,6 +10,21 @@ export const PaginationContract = Object.freeze({
   pageSize: 'number',
 })
 
+export const AuditCompensationDto = Object.freeze({
+  compensationId: 'string',
+  tenantId: 'string',
+  requestId: 'string',
+  targetId: 'string',
+  actionCode: 'string',
+  auditLevel: 'A|B|C',
+  errorCode: 'string',
+  retryable: 'boolean',
+  status: 'pending|resolved',
+  resolutionNote: 'string|null',
+  resolvedAt: 'string|null',
+  createdAt: 'string',
+})
+
 export const QueueFilterContract = Object.freeze({
   ownerScope: 'mine|team|all',
   riskLevel: 'low|medium|high',
@@ -48,7 +63,6 @@ export const StartIntakeCommand = Object.freeze({
 
 export const SendSupplementRequestCommand = Object.freeze({
   caseId: 'string',
-  messageTemplateCode: 'string',
 })
 
 export const SubmitForReviewCommand = Object.freeze({
@@ -62,7 +76,6 @@ export const ReturnToClientCommand = Object.freeze({
 
 export const ReturnToInternalCommand = Object.freeze({
   caseId: 'string',
-  reasonCode: 'string',
 })
 
 export const EscalateCaseCommand = Object.freeze({
@@ -97,6 +110,11 @@ export const ApproveApprovalCommand = Object.freeze({
 export const RejectApprovalCommand = Object.freeze({
   caseId: 'string',
   reasonCode: 'string',
+})
+
+export const ConvertActionItemToTaskCommand = Object.freeze({
+  actionItemId: 'string',
+  assigneeId: 'string?',
 })
 
 export const MarkReadyForNextStepCommand = Object.freeze({
@@ -162,6 +180,41 @@ export const TaskDto = Object.freeze({
   assigneeId: 'string|null',
   createdAt: 'string',
   updatedAt: 'string',
+})
+
+export const ActionItemDto = Object.freeze({
+  actionItemId: 'string',
+  tenantId: 'string',
+  caseId: 'string',
+  title: 'string',
+  blockerType: 'missing_material|review_required|approval_required|security_hold',
+  status: 'open|dismissed|converted_to_task',
+  convertedTaskId: 'string|null',
+  createdAt: 'string',
+  updatedAt: 'string',
+})
+
+export const RetryNotificationDeliveryCommand = Object.freeze({
+  notificationId: 'string',
+  outcome: 'sent|failed?',
+  failureReason: 'string?',
+})
+
+export const NotificationDispatchDto = Object.freeze({
+  notificationId: 'string',
+  tenantId: 'string',
+  caseId: 'string',
+  channel: 'internal',
+  notificationType: 'supplement_request_internal',
+  recipientRole: 'case_operator',
+  recipientActorId: 'string|null',
+  payload: 'object',
+  deliveryStatus: 'pending|sent|failed',
+  deliveryAttempts: 'number',
+  lastAttemptAt: 'string|null',
+  deliveredAt: 'string|null',
+  failureReason: 'string|null',
+  dispatchedAt: 'string',
 })
 
 export const RawFileObjectDto = Object.freeze({

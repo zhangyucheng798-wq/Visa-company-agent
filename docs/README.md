@@ -9,6 +9,10 @@
 - `DATA_MODEL.md`：数据模型和数据治理要求
 - `WORKFLOWS.md`：核心业务流程
 - `SECURITY_BASELINE.md`：安全与合规基线
+- `staging-verification-pack.md`：预发环境最小验收与演示前核对清单
+- `demo-readiness-gate.md`：演示前 go/no-go 决策基线
+- `runbooks/recovery-runbook.md`：服务恢复与故障处置最小 runbook
+- `runbooks/migration-rollback-runbook.md`：数据库迁移回滚最小 runbook
 
 ## 使用方式
 

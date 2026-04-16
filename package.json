@@ -10,6 +10,9 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "verify": "pnpm lint && pnpm typecheck && pnpm test",
+    "verify:local-baseline": "node scripts/verify/local-baseline.js",
+    "test:formal": "pnpm --filter @visa/api test && pnpm --filter @visa/workers test && pnpm --filter @visa/web-client test && pnpm --filter @visa/web-ops test",
+    "test:e2e-smoke": "node --test apps/web-client/test/e2e-smoke.test.js && node --test apps/web-ops/test/e2e-smoke.test.js",
     "db:create-migration": "node scripts/db/create-migration.js",
     "db:verify-migrations": "node scripts/db/verify-migrations.js"
   },

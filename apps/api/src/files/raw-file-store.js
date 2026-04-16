@@ -28,16 +28,16 @@ export function createRawFileObject({ tenantId, actorId, caseId, materialSlotId,
   return record
 }
 
-export function listRawFileObjects() {
-  return [...rawFileObjects]
+export function listRawFileObjects(tenantId = null) {
+  return rawFileObjects.filter((item) => !tenantId || item.tenantId === tenantId)
 }
 
-export function findRawFileObject(rawFileObjectId) {
-  return rawFileObjects.find((item) => item.rawFileObjectId === rawFileObjectId) || null
+export function findRawFileObject(rawFileObjectId, tenantId = null) {
+  return rawFileObjects.find((item) => item.rawFileObjectId === rawFileObjectId && (!tenantId || item.tenantId === tenantId)) || null
 }
 
-export function updateRawFileStatuses(rawFileObjectId, patch) {
-  const record = findRawFileObject(rawFileObjectId)
+export function updateRawFileStatuses(rawFileObjectId, tenantId, patch) {
+  const record = findRawFileObject(rawFileObjectId, tenantId)
   if (!record) return null
 
   Object.assign(record, patch, {
@@ -46,8 +46,8 @@ export function updateRawFileStatuses(rawFileObjectId, patch) {
   return record
 }
 
-export function listDocumentVersions() {
-  return [...documentVersions]
+export function listDocumentVersions(tenantId = null) {
+  return documentVersions.filter((item) => !tenantId || item.tenantId === tenantId)
 }
 
 export function createDocumentVersionFromRawFile(rawFileObject, actorId) {
